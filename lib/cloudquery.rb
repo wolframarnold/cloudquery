@@ -140,7 +140,7 @@ module Cloudquery
     #
     # If +document_id_method+ is set, it will be called on each
     # document as a part of +add_documents+ and +update_documents+
-    # which should inject an <tt>'#.id'</tt> key-value pair as a
+    # which should inject an <tt>'#.#'</tt> key-value pair as a
     # simple way to tie app PKs to doc ids.
     def initialize(options={})
       # unless options[:account] && options[:secret]
@@ -178,6 +178,21 @@ module Cloudquery
       end
     end
 
+    # change password
+    # optionally change the secret
+    def self.change_password(account, old_password, new_password, new_secret=nil)
+      secret = get_secret(account, old_password)
+      c = Client.new(:account => account, :secret => secret, :secure => true)
+      a = c.get_account()['result']
+      a['password'] = new_password
+      a.delete('secret')
+      if new_secret != nil
+        a['secret'] = new_secret
+      end
+      c.update_account(a)
+      return (new_secret != nil ? new_secret : secret); 
+    end
+
     # Get the account document
     def get_account
       send_request get(account_path)
@@ -211,10 +226,13 @@ module Cloudquery
     end
     
     # Delete a schema from the account, by name
-    def delete_schema(schema_name)
+    # if cascade is true, all documents with the specified schema will be deleted
+    # (use with care)
+    def delete_schema(schema_name, cascade=nil)
+      c = cascade ? "?cascade=true" : ""
       send_request delete(build_path(
         API_PATHS[:schema],
-        Rack::Utils.escape("xfs.schema.name:\"#{schema_name}\"")
+        Rack::Utils.escape("$.name:\"#{schema_name}\"#{c}")
       ))
     end
     
@@ -253,13 +271,14 @@ module Cloudquery
     #
     # <tt>index = name</tt> or +id+, <tt>docs = {}</tt> or +Array+ of <tt>{}</tt>.
     #
-    # Documents with key <tt>'#.id'</tt> and an existing value will be updated.
+    # Documents with key <tt>'#.#'</tt> and an existing value will be updated.
     #
     # If +schemas+ is not +nil+, ensures existence of the
     # specified schemas on each document.
-    def add_documents(index, docs, *schemas)
+    def add_documents(index, docs, schemas=[], fieldmode=nil)
+      fm = fieldmode != nil ? "?fieldmode=#{fieldmode}" : ""
       request = post(
-        build_path(API_PATHS[:documents], index, url_pipe_join(schemas)),
+        build_path(API_PATHS[:documents], index, url_pipe_join(schemas), fm),
         JSON.generate(identify_documents(docs))
       )
       send_request request
@@ -269,13 +288,14 @@ module Cloudquery
     
     # <tt>index = name</tt> or +id+, <tt>docs = {}</tt> or +Array+ of <tt>{}</tt>.
     #
-    # Documents lacking the key <tt>'#.id'</tt> will be created.
+    # Documents lacking the key <tt>'#.#'</tt> will be created.
     #
     # If +schemas+ is not +nil+, ensures existence of the
     # specified schemas on each document.
-    def update_documents(index, docs, *schemas)
+    def update_documents(index, docs, schemas=[] fieldmode=nil)
+      fm = fieldmode != nil ? "?fieldmode=#{fieldmode}" : ""
       request = put(
-        build_path(API_PATHS[:documents], index, url_pipe_join(schemas)),
+        build_path(API_PATHS[:documents], index, url_pipe_join(schemas), fm),
         JSON.generate(identify_documents(docs))
       )
       send_request request
@@ -288,9 +308,10 @@ module Cloudquery
     #
     # If +schemas+ is not +nil+, ensures existence of the
     # specified schemas on each document.
-    def modify_documents(index, query, modifications, *schemas)
+    def modify_documents(index, query, modifications, schemas=[], fieldmode=nil)
+      fm = fieldmode != nil ? "?fieldmode=#{fieldmode}" : ""
       request = put(
-        build_path(API_PATHS[:documents], index, url_pipe_join(schemas), Rack::Utils.escape(query)),
+        build_path(API_PATHS[:documents], index, url_pipe_join(schemas), Rack::Utils.escape(query), fm),
         JSON.generate(modifications)
       )
       send_request request
@@ -305,15 +326,24 @@ module Cloudquery
     #
     # ==== BEWARE: If +query+ = +nil+ this will delete ALL documents in +index+.
     #
+    # ==== Acceptable options:
+    #   :sort => a string ("[+|-]schema.field"), or a list thereof (default  => index-order)
+    #   :offset => integer offset into the result set (default => 0)
+    #   :limit => integer limit on number of documents returned per index (default => <no limit>)
+    #
     # If +schemas+ is not +nil+, ensures existence of the
     # specified schemas on each document.
-    def delete_documents(index, query, *schemas)
+    def delete_documents(index, query, options={}, schemas=[])
+      if options[:sort]
+        options[:sort] = Array(options[:sort]).flatten.join(',')
+      end
       request = delete(
         build_path(API_PATHS[:documents],
           url_pipe_join(index),
           url_pipe_join(schemas),
           Rack::Utils.escape(query)
-        )
+        ),
+        options
       )
       send_request request
     end
@@ -327,13 +357,16 @@ module Cloudquery
     #
     # ==== Acceptable options:
     #   :fields => a field name, a prefix match (e.g. 'trans*'), or Array of fields (default => '*')
-    #   :sort => a string ("[+|-]schema.field"), or a list thereof (default  => '+#.number')
+    #   :sort => a string ("[+|-]schema.field"), or a list thereof (default  => index-order)
     #   :offset => integer offset into the result set (default => 0)
     #   :limit => integer limit on number of documents returned per index (default => <no limit>)
+    #   :fieldmode => 'short' or 'long'/nil, if 'short' then field names will be returned in their
+    #                 short form (no schema name prefix), this can cause naming collisions depending
+    #                 on use schema definition and data etc.
     #
     # If +schemas+ is not +nil+, ensures existence of the
     # specified schemas on each document.
-    def get_documents(index, query, options={}, *schemas)
+    def get_documents(index, query, options={}, schemas=[])
       if fields = options.delete(:fields)
         fields = url_pipe_join(fields)
       end
@@ -363,8 +396,8 @@ module Cloudquery
     #
     # If +schemas+ is not +nil+, ensures existence of the
     # specified schemas on each document.
-    def count_documents(index, query, *schemas)
-      get_documents(index, query, {:fields => '@count'}, *schemas)
+    def count_documents(index, query, schemas)
+      get_documents(index, query, {:fields => '@count'}, schemas)
     end
     
     private
@@ -465,3 +498,4 @@ class Time
     (to_f * 1000).to_i
   end
 end
+# vim:expandtab ts=2
