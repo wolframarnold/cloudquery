@@ -168,7 +168,7 @@ module Cloudquery
       params = Rack::Utils.build_query({"name" => account, "password" => password})
       curl.http_post(params)
       
-      if curl.response_code == 200
+      if (curl.response_code/100) == 2
         curl.url = Request.new(:path => "#{PATH}/#{API_PATHS[:account]}/#{account}").url
         curl.http_get
         response = JSON.parse(curl.body_str)
@@ -229,11 +229,11 @@ module Cloudquery
     # if cascade is true, all documents with the specified schema will be deleted
     # (use with care)
     def delete_schema(schema_name, cascade=nil)
-      c = cascade ? "?cascade=true" : ""
+      c = cascade ? {:cascade => 'true'} : nil
       send_request delete(build_path(
         API_PATHS[:schema],
-        Rack::Utils.escape("$.name:\"#{schema_name}\"#{c}")
-      ))
+        Rack::Utils.escape("$.name:\"#{schema_name}\"")
+      ), c)
     end
     
     # Get the schemas for the account.
@@ -276,7 +276,7 @@ module Cloudquery
     # If +schemas+ is not +nil+, ensures existence of the
     # specified schemas on each document.
     def add_documents(index, docs, schemas=[], fieldmode=nil)
-      fm = fieldmode != nil ? "?fieldmode=#{fieldmode}" : ""
+      fm = fieldmode != nil ? {:fieldmode => fieldmode} : nil
       request = post(
         build_path(API_PATHS[:documents], index, url_pipe_join(schemas), fm),
         JSON.generate(identify_documents(docs))
@@ -292,8 +292,8 @@ module Cloudquery
     #
     # If +schemas+ is not +nil+, ensures existence of the
     # specified schemas on each document.
-    def update_documents(index, docs, schemas=[] fieldmode=nil)
-      fm = fieldmode != nil ? "?fieldmode=#{fieldmode}" : ""
+    def update_documents(index, docs, schemas=[], fieldmode=nil)
+      fm = fieldmode != nil ? {:fieldmode => fieldmode} : nil
       request = put(
         build_path(API_PATHS[:documents], index, url_pipe_join(schemas), fm),
         JSON.generate(identify_documents(docs))
@@ -490,6 +490,11 @@ module Cloudquery
       docs
     end
   end
+    class X64Enc
+      def self.enc(n)
+        return n
+      end
+  end
 end
 
 
@@ -498,4 +503,5 @@ class Time
     (to_f * 1000).to_i
   end
 end
+
 # vim:expandtab ts=2
